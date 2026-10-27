@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# chain: drive a long task as a chain of short, unattended Claude Code sessions.
+set -uo pipefail
+ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
+LIB=$ROOT/lib
+# shellcheck source=../lib/common.sh
+. "$LIB/common.sh"
+
+usage() {
+  cat <<'EOF'
+usage: chain <command> [args]
+
+  init <id> [--base <branch>] [--max-steps <n>]   scaffold .chain/runs/<id>/RUN.md and HANDOFF.md
+  run <id> [--bg]                                  run the chain (--bg: detach and return at once)
+  watch <id>                                       one line per finished step; ends when the run stops
+  live <id> [--all]                                each step's messages and commands as they happen
+  report <id>                                      print the report written when the run stopped
+
+Run it from inside the git repository you want to work on (or set CHAIN_REPO).
+Settings are environment variables; see README.md and the header of lib/run.sh.
+EOF
+}
+
+cmd=${1:-}; shift || true
+case "$cmd" in
+  init)
+    id=${1:?usage: chain init <id>}; shift
+    base=""; max=20
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --base) base=${2:?--base needs a branch}; shift 2 ;;
+        --max-steps) max=${2:?--max-steps needs a number}; shift 2 ;;
+        *) echo "chain init: unknown option $1" >&2; exit 2 ;;
+      esac
+    done
+    chain_valid_id "$id" || exit 2
+    chain_resolve || exit 2
+    base=${base:-$(git -C "$REPO" branch --show-current)}
+    [ -n "$base" ] || { echo "chain init: detached HEAD, pass --base <branch>" >&2; exit 2; }
+    dir=$CHAIN_HOME/runs/$id
+    [ -e "$dir/RUN.md" ] && { echo "chain init: $dir/RUN.md already exists" >&2; exit 2; }
+    mkdir -p "$dir"
+    chain_ignore "/.chain/" "/.chain-run/"
+    cat > "$dir/RUN.md" <<EOF
+# Run $id
+
+Base: $base
+Max steps: $max
+Plan: none
+
+## Goal
+(Describe the finished state in a few sentences. A step that reads this must be able to tell when it is done.)
+
+## Plan
+(Ordered units of work. Each unit should fit one atomic commit.)
+1.
+
+## Limits
+- (What the run may not touch, what it must not change, anything that needs the owner.)
+
+## Checks
+- (The exact commands that prove a unit works, for example the test command for this repo.)
+
+## Known red
+(Failures that already exist on the base, so a step does not chase them. Write "none" if there are none.)
+EOF
+    cat > "$dir/HANDOFF.md" <<'EOF'
+# Handoff
+
+Nothing done yet. This is the first step: start with the first unit of the plan in RUN.md.
+
+SUMMARY: run created, no work yet
+STATUS: next
+EOF
+    echo "created $dir/RUN.md and HANDOFF.md"
+    echo "edit RUN.md, then: chain run $id"
+    ;;
+  run)
+    id=${1:?usage: chain run <id> [--bg]}
+    if [ "${2:-}" = "--bg" ]; then
+      chain_valid_id "$id" || exit 2
+      chain_resolve || exit 2
+      mkdir -p "$CHAIN_HOME/runs/$id"
+      nohup bash "$LIB/run.sh" "$id" > "$CHAIN_HOME/runs/$id/runner.out" 2>&1 < /dev/null &
+      echo "run $id started in the background (pid $!). Follow it with: chain watch $id"
+    else
+      exec bash "$LIB/run.sh" "$id"
+    fi
+    ;;
+  watch) exec bash "$LIB/watch.sh" "${1:?usage: chain watch <id>}" ;;
+  live) exec node "$LIB/live.mjs" "$@" ;;
+  report)
+    id=${1:?usage: chain report <id>}
+    chain_resolve || exit 2
+    cat "$CHAIN_HOME/runs/$id/report.md" ;;
+  ""|-h|--help|help) usage ;;
+  *) echo "chain: unknown command '$cmd'" >&2; usage >&2; exit 2 ;;
+esac
