@@ -1,0 +1,11 @@
+{
+  "name": "agent-chain-runner",
+  "version": "0.1.0",
+  "description": "Run a long task as a chain of short, unattended Claude Code sessions with a written handoff.",
+  "private": true,
+  "license": "MIT",
+  "author": "Andrew U",
+  "bin": { "chain": "bin/chain" },
+  "scripts": { "test": "bash test/selftest.sh" },
+  "engines": { "node": ">=18" }
+}
